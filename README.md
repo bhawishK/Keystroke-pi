@@ -1,0 +1,238 @@
+# Keystroke Spike
+
+Keystroke Spike is a local, stateful keystroke predictor built with Python and Pygame for a 720 × 720 Raspberry Pi cyberdeck display. It renders one user-controlled line and nine synthetic “ghost” lines. A bounded character-level n-gram model learns both transition probabilities and inter-key timing online; every accepted user keystroke causes each ghost to schedule one predicted character.
+
+The application has no server component, network dependency, or pretrained model. Inference, learning, rendering, and persistence all run in one process.
+
+## System architecture
+
+```text
+                       Pygame event loop
+                              │
+              ┌───────────────┴───────────────┐
+              │                               │
+       accepted character                timer tick
+              │                               │
+              ▼                               ▼
+      NgramPredictor.learn()          GhostRunner.tick()
+              │                               │
+      update transition and            flush due entries
+         timing buckets                into ghost text
+              │                               │
+              ▼                               │
+    GhostRunner.on_user_keyed()                │
+              │                               │
+     sample one character and                  │
+    delay for each of 9 ghosts                 │
+              └───────────────┬───────────────┘
+                              ▼
+                    render all 10 lines
+```
+
+The process runs a 60 FPS event/render loop. Prediction is synchronous and uses small in-memory collections; ghost output is asynchronous within the loop through timestamped queues rather than threads or coroutines.
+
+## Core algorithm
+
+### Character prediction
+
+The predictor is a fixed-order character model with an order of three. For each accepted character `c`, it uses the preceding three-character context `p` to append a sample to a transition bucket:
+
+```text
+next[p] = [..., c]
+```
+
+Inference samples uniformly from the stored observations for the current prefix. Keeping repeated observations in the bucket implicitly preserves empirical frequency without maintaining explicit counters.
+
+The fallback chain is:
+
+1. Sample from the current three-character prefix.
+2. Sample from the pooled observations across all prefixes.
+3. Sample a random lowercase ASCII letter.
+
+Only ASCII letters, digits, and spaces are admitted by the input layer. Backspace edits the displayed user text but is not learned as a model token.
+
+### Timing prediction
+
+The model records the elapsed time between accepted user keystrokes in a parallel bucket:
+
+```text
+timing[p] = [..., interval_ms]
+```
+
+Intervals are clamped to `[40, 2000]` ms. Prediction uses the median for the active prefix, then the global median if that prefix has no samples, then a cold-start default of `320` ms.
+
+Each ghost applies independent multiplicative jitter to the predicted interval:
+
+```text
+delay = clamp(base × uniform(0.72, 1.28), 70, 1400)
+```
+
+Ghost queues are serialized per line using `busy_until`. If the user types faster than a ghost emits, new output is scheduled after that ghost's last queued character rather than at the current wall-clock time.
+
+### Bounded state
+
+The learner has explicit limits suitable for a small always-on device:
+
+| Parameter | Value | Purpose |
+| --- | ---: | --- |
+| Prefix length | 3 characters | Local context for prediction |
+| Prefix capacity | 2,000 | Caps model cardinality |
+| Samples per bucket | 64 | Caps transition and timing history |
+| Save interval | 8 accepted keys | Limits unsaved state |
+| Internal history | 11 characters maximum | Bounds active context storage |
+| Stored text per line | 160 characters | Bounds display state |
+| Visible tail per line | 42 characters | Fits the square UI |
+
+Prefixes are tracked in recency order. Exceeding 2,000 prefixes removes the least recently touched prefix from both transition and timing maps.
+
+## Runtime behavior
+
+`src/main.py` owns the application lifecycle:
+
+1. Detect Raspberry Pi hardware through `/proc/device-tree/model`.
+2. Initialize SDL/Pygame and create a logical 720 × 720 surface.
+3. Load `data/model-v1.json` when present and valid.
+4. Select one of ten rows as the live input row for the session.
+5. Process keyboard events, advance ghost queues, and redraw at 60 FPS.
+6. Save model state during normal shutdown.
+
+`pygame.SCALED` lets SDL scale the logical square surface for the physical display. Raspberry Pi execution defaults to fullscreen; other platforms default to a fixed-size window. `--fullscreen` and `--window` override detection.
+
+Audio is unused, so `SDL_AUDIODRIVER` defaults to `dummy`. Key repeat is disabled to make each learned event correspond to a distinct key-down event.
+
+## Persistence format
+
+Model state is written as UTF-8 JSON to `data/model-v1.json`:
+
+```json
+{
+  "next": {
+    "the": ["r", " ", "r"]
+  },
+  "timing": {
+    "the": [182, 241, 195]
+  },
+  "recency": ["the"]
+}
+```
+
+- `next` maps a three-character prefix to observed successor characters.
+- `timing` maps the same prefix to observed inter-key intervals in milliseconds.
+- `recency` stores prefix eviction order from oldest to newest.
+
+Writes occur every eight learned characters and on normal process exit. Saving writes directly with `Path.write_text`; it is not transactional or atomic. Malformed or structurally invalid JSON is ignored at startup. File-system errors during load, save, reset, or directory creation are intentionally non-fatal.
+
+Holding Backspace for two seconds clears in-memory model state, ghost queues, live text, and the persisted model file.
+
+## Repository layout
+
+```text
+keystroke-spike/
+├── src/
+│   ├── main.py          # Event loop, input state, rendering, app lifecycle
+│   ├── predictor.py     # Online n-gram learner and JSON persistence
+│   ├── ghosts.py        # Per-ghost queues, scheduling, and text bounds
+│   └── charset.py       # Input validation and cold-start alphabet
+├── scripts/
+│   ├── setup-pi.sh      # Raspberry Pi OS packages and virtual environment
+│   └── run-pi.sh        # Display setup, process launch, and error logging
+├── pi/
+│   ├── install-desktop-launcher.sh
+│   ├── keystroke-spike.png
+│   └── README-PI.txt
+├── data/                # Runtime model storage
+└── requirements-pi.txt  # Pygame 2.6.x
+```
+
+## Requirements
+
+- Python 3 with `venv`
+- Pygame `>=2.6,<3`
+- SDL 2 runtime libraries
+- A serif system font; Liberation Serif and DejaVu Serif are Pi fallbacks
+- Raspberry Pi OS for the automated device setup script
+
+The application code is portable across Linux, macOS, and Windows. The provisioning and desktop-launcher scripts target Raspberry Pi OS/Linux.
+
+## Development setup
+
+### Linux or macOS
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-pi.txt
+python src/main.py --window
+```
+
+### Windows PowerShell
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-pi.txt
+python src\main.py --window
+```
+
+CLI options:
+
+```text
+python src/main.py [--fullscreen | --window]
+```
+
+## Raspberry Pi deployment
+
+Run provisioning as the intended desktop user, not as `root`:
+
+```bash
+cd ~/keystroke-spike
+chmod +x scripts/*.sh pi/*.sh
+./scripts/setup-pi.sh
+```
+
+The script:
+
+1. Verifies that `/proc/device-tree/model` identifies a Raspberry Pi.
+2. Installs Python, SDL 2, FreeType, and fallback fonts through `apt`.
+3. Creates `.venv` in the repository.
+4. Installs the pinned Pygame range.
+
+Launch manually:
+
+```bash
+./scripts/run-pi.sh
+```
+
+Install `.desktop` entries in `~/Desktop` and `~/.local/share/applications`:
+
+```bash
+./pi/install-desktop-launcher.sh
+```
+
+The runtime wrapper records environment details and stderr/stdout in `launch.log`. It uses `DISPLAY=:0` when neither X11 nor Wayland display variables are available, and displays launch failures through `zenity` when installed.
+
+Use windowed mode on the Pi with:
+
+```bash
+./scripts/run-pi.sh --window
+```
+
+## Controls
+
+| Input | Behavior |
+| --- | --- |
+| `A–Z`, `a–z`, `0–9`, space | Append to live text, update the model, schedule ghost output |
+| Backspace | Delete one live-text character |
+| Hold Backspace for 2 seconds | Reset all transient and persisted learned state |
+| Esc | Exit and save model state |
+| Ctrl/Alt/Meta-modified input | Ignored |
+
+## Operational notes
+
+- The generated model can reflect user typing patterns. Keep `data/model-v1.json` out of version control if that data is sensitive.
+- Abrupt power loss can discard up to seven accepted keystrokes and may interrupt a JSON write.
+- The launcher log is append-only and is not automatically rotated.
+- The model format is versioned through its filename rather than an internal schema field.
+- There is currently no automated test suite or migration path between model versions.
