@@ -2,6 +2,9 @@ param(
     [ValidateSet('llm', 'random')][string]$Engine = 'llm',
     [int]$FallbackMs = 0,
     [string]$ModelPath = 'models/SmolLM2-360M-Instruct-Q4_K_M.gguf',
+    [ValidateRange(1, 64)][int]$Threads = 4,
+    [ValidateRange(1024, 32768)][int]$ContextSize = 2048,
+    [ValidateSet('basic', 'desktop')][string]$Profile = 'basic',
     [int]$Port = 8080
 )
 $ErrorActionPreference = 'Stop'
@@ -23,9 +26,9 @@ try {
         if ($occupied) { throw "Port $Port is occupied. Stop that service or use -Port." }
         $serverProcess = Start-Process -FilePath $server -ArgumentList @(
             '-m', ('"' + $model + '"'), '--host', '127.0.0.1', '--port', $Port,
-            '-c', '2048', '-t', '4', '-np', '1'
+            '-c', $ContextSize, '-t', $Threads, '-np', '1'
         ) -WindowStyle Hidden -RedirectStandardOutput .runtime/server.out.log -RedirectStandardError .runtime/server.err.log -PassThru
-        $deadline = (Get-Date).AddSeconds(60)
+        $deadline = (Get-Date).AddSeconds(120)
         $ready = $false
         while ((Get-Date) -lt $deadline) {
             if ($serverProcess.HasExited) { throw 'Model server exited. See .runtime/server.err.log.' }
@@ -37,7 +40,7 @@ try {
         }
         if (-not $ready) { throw 'Model loading timed out. See .runtime/server.err.log.' }
     }
-    & $python src/main.py --window --engine $Engine --fallback-ms $FallbackMs --endpoint "http://127.0.0.1:$Port/v1/chat/completions"
+    & $python src/main.py --window --engine $Engine --fallback-ms $FallbackMs --llm-profile $Profile --endpoint "http://127.0.0.1:$Port/v1/chat/completions"
     if ($LASTEXITCODE -ne 0) { throw "Application exited with code $LASTEXITCODE" }
 } finally {
     if ($serverProcess -and -not $serverProcess.HasExited) {

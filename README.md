@@ -1,3 +1,39 @@
+# Desktop LLM testing branch
+
+This branch (`desktop-llm-testing`) adds a larger local model and prompts for the authorship-recognition game. `main` remains at the lightweight Pi-oriented baseline (`95eefbe`), including random fallback. No changes from this branch have been merged into main.
+
+## Run the desktop experiment
+
+```powershell
+# Download the desktop model once (about 2 GB):
+powershell -ExecutionPolicy Bypass -File scripts/setup-desktop.ps1
+# Start the desktop model and writing app:
+powershell -ExecutionPolicy Bypass -File scripts/run-desktop.ps1
+```
+
+The default is `bartowski/Qwen2.5-3B-Instruct-GGUF` / `Qwen2.5-3B-Instruct-Q4_K_M.gguf`, with a 4096-token context and six CPU threads. This is sized for the inspected desktop (about 16 GB RAM, Ryzen 5 150, integrated Radeon graphics). The installed runtime uses the CPU; integrated GPU acceleration has not been configured. More RAM does not guarantee faster inference. Generation may be slower than SmolLM2, so immediate random fallback remains enabled. The desktop request timeout is 45 seconds; rendering does not wait for it.
+
+If the Hugging Face accelerated download stalls, retry setup with `$env:HF_HUB_DISABLE_XET='1'` in PowerShell. A different compatible GGUF model can be selected using `-ModelPath`; tune CPU usage using `-Threads`. Both launchers stop the server they started on exit.
+
+```powershell
+# Compare the larger model using the original simple prompt:
+powershell -ExecutionPolicy Bypass -File scripts/run-desktop.ps1 -Profile basic
+# Run the lightweight model without switching branches:
+powershell -ExecutionPolicy Bypass -File scripts/run-local.ps1
+```
+
+To return to the preserved lightweight version, close the application and run `git switch main`. To resume this experiment, run `git switch desktop-llm-testing`. Models and environments are ignored local files shared by these branches, not committed assets.
+
+## What the model is instructed to do
+
+The editable instructions live in `src/writing_prompts.py`. The desktop profile asks it to write a competing anonymous line that the participant might mistake for their own: match topic, vocabulary, perspective, capitalization, short phrasing, informal grammar, and roughness. Nine row-specific strategies vary close paraphrases, small alternative details, neighboring thoughts, emotional tone, and plausible recollections. It must not explain the game, speak as an assistant, label its output, or copy the entire human sample. Each result is a standalone passage so late output can recover after random fallback.
+
+Output is filtered to the same letters/digits/spaces alphabet as human input, preventing punctuation alone from identifying AI rows. Model instructions are best-effort; matching style and confusing a participant require hands-on evaluation. The prompt changes do not hide the immediate key-to-row timing cue, so this is a live-writing test rather than proof that identity cannot be inferred. Shuffled recognition rounds are not implemented here.
+
+Run all tests with `.venv/Scripts/python.exe -m unittest discover -s tests -v`. The desktop tests cover distinct row strategies, output filtering, basic-profile compatibility, and timeout selection; the original fallback regression tests still apply.
+
+---
+
 # Local AI writing demo (Windows)
 
 The desktop prototype now supports nine locally generated AI lines alongside one human line. The original random generator remains available. The sections below this guide describe the original random-only implementation.
