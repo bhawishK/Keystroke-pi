@@ -1,4 +1,5 @@
 param(
+    [ValidateRange(0, 600000)][int]$ShuffleMs = 0,
     [ValidateSet('llm', 'random')][string]$Engine = 'llm',
     [int]$FallbackMs = 0,
     [string]$ModelPath = 'models/SmolLM2-360M-Instruct-Q4_K_M.gguf',
@@ -40,7 +41,7 @@ try {
         }
         if (-not $ready) { throw 'Model loading timed out. See .runtime/server.err.log.' }
     }
-    & $python src/main.py --window --engine $Engine --fallback-ms $FallbackMs --llm-profile $Profile --endpoint "http://127.0.0.1:$Port/v1/chat/completions"
+    & $python src/main.py --window --engine $Engine --fallback-ms $FallbackMs --llm-profile $Profile --shuffle-ms $ShuffleMs --endpoint "http://127.0.0.1:$Port/v1/chat/completions"
     if ($LASTEXITCODE -ne 0) { throw "Application exited with code $LASTEXITCODE" }
 } finally {
     if ($serverProcess -and -not $serverProcess.HasExited) {

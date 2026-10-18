@@ -15,6 +15,7 @@ from local_llm import LocalLLM
 from charset import is_allowed_char
 from ghosts import GhostRunner, trim_line, visible_tail
 from predictor import MODEL_FILENAME, NgramPredictor
+from row_layout import RowLayout
 
 APP_SIZE = 720
 LINE_COUNT = 10
@@ -66,7 +67,7 @@ def load_font(size: int) -> pygame.font.Font:
 
 
 class KeystrokeApp:
-    def __init__(self, *, fullscreen: bool, engine="random", endpoint="http://127.0.0.1:8080/v1/chat/completions", fallback_ms=0, llm_profile="basic") -> None:
+    def __init__(self, *, fullscreen: bool, engine="random", endpoint="http://127.0.0.1:8080/v1/chat/completions", fallback_ms=0, llm_profile="basic", shuffle_ms=0) -> None:
         flags = pygame.SCALED
         if fullscreen:
             flags |= pygame.FULLSCREEN
@@ -79,6 +80,7 @@ class KeystrokeApp:
         self.predictor = NgramPredictor(MODEL_PATH)
         self.predictor.load()
         self.live_index = random.randrange(LINE_COUNT)
+        self.row_layout = RowLayout(LINE_COUNT, shuffle_ms)
         self.ghosts = (AILines(LINE_COUNT - 1, self.predictor, LocalLLM(endpoint, profile=llm_profile), fallback_ms)
                        if engine == "llm" else GhostRunner(LINE_COUNT - 1, self.predictor))
 
@@ -109,6 +111,7 @@ class KeystrokeApp:
                     self._reset()
                     self.backspace_down_at = None
                 self.ghosts.tick(now)
+                self.row_layout.tick(now)
                 self._draw(now)
                 self.clock.tick(60)
         finally:
@@ -137,6 +140,7 @@ class KeystrokeApp:
         return True
 
     def _on_typed(self, char: str, now: int) -> None:
+        self.row_layout.start(now)
         self.show_hint = False
         interval = (
             now - self.last_key_time
@@ -163,6 +167,7 @@ class KeystrokeApp:
     def _reset(self) -> None:
         self.predictor.reset()
         self.ghosts.reset()
+        self.row_layout.reset()
         self.live_text = ""
         self.last_key_time = None
         self.show_hint = True
@@ -185,7 +190,7 @@ class KeystrokeApp:
         caret_h = int(self.font.get_height() * 0.92)
 
         for i in range(LINE_COUNT):
-            text = self._line_text(i)
+            text = self._line_text(self.row_layout.rows[i])
             surface = self.font.render(text, True, WHITE) if text else None
             y = self.pad_y + self.row_h * i + (self.row_h - self.font.get_height()) / 2
             x = self.pad_x
@@ -218,7 +223,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--endpoint", default="http://127.0.0.1:8080/v1/chat/completions")
     parser.add_argument("--fallback-ms", type=int, default=0)
     parser.add_argument("--llm-profile", choices=("basic", "desktop"), default="basic")
+    parser.add_argument("--shuffle-ms", type=int, default=0,
+                        help="Shuffle screen positions at this interval; 0 disables")
     args = parser.parse_args()
+    if args.shuffle_ms < 0:
+        parser.error("--shuffle-ms must be nonnegative")
     if args.fallback_ms < 0:
         parser.error("--fallback-ms must be nonnegative")
     return args
@@ -233,7 +242,7 @@ def main() -> None:
     pygame.key.set_repeat(0)
     try:
         KeystrokeApp(fullscreen=fullscreen, engine=args.engine, endpoint=args.endpoint,
-                     fallback_ms=args.fallback_ms, llm_profile=args.llm_profile).run()
+                     fallback_ms=args.fallback_ms, llm_profile=args.llm_profile, shuffle_ms=args.shuffle_ms).run()
     finally:
         pygame.quit()
 
