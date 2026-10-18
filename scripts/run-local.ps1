@@ -1,6 +1,6 @@
 param(
     [ValidateSet('llm', 'random')][string]$Engine = 'llm',
-    [int]$FallbackMs = 500,
+    [int]$FallbackMs = 0,
     [string]$ModelPath = 'models/SmolLM2-360M-Instruct-Q4_K_M.gguf',
     [int]$Port = 8080
 )

@@ -88,6 +88,78 @@ class SchedulerTests(unittest.TestCase):
         self.assertEqual(self.runner.stats["errors"], 1)
 
 
+    def test_fast_typing_without_model_keeps_pace(self):
+        self.runner.fallback_ms = 0
+        next_key = 0
+        for now in range(0, 3000, 16):
+            if now >= next_key and next_key < 2000:
+                self.runner.on_user_keyed(next_key)
+                next_key += 50
+            self.runner.tick(now)
+        for line in self.runner.lines:
+            self.assertEqual(len(line.text), 40)
+            self.assertFalse(line.due)
+
+    def test_fallback_wait_is_not_repeated_for_every_character(self):
+        line = self.runner.lines[0]
+        self.runner.on_user_keyed(0)
+        due = line.due[0]
+        self.runner.tick(due + 500)
+        before = len(line.text)
+        self.runner.on_user_keyed(due + 501)
+        self.runner.tick(line.due[0])
+        self.assertEqual(len(line.text), before + 1)
+
+    def test_slow_model_recovers_after_many_fallback_characters(self):
+        self.runner.fallback_ms = 0
+        for now in range(0, 2000, 50):
+            self.runner.on_user_keyed(now)
+            self.runner.tick(now + 90)
+        self.assertGreater(self.runner.stats["random_chars"], 50)
+        self.worker.results.append(Result(0, 0, 0, "New AI sentence.", 2000))
+        self.runner.tick(2100)
+        self.runner.on_user_keyed(2200)
+        self.runner.tick(2300)
+        self.assertGreater(self.runner.stats["ai_chars"], 0)
+        self.assertEqual(self.runner.stats["stale"], 0)
+
+    def test_server_failures_back_off_globally(self):
+        self.runner.on_user_keyed(0)
+        self.runner.tick(0)
+        self.worker.results.append(Result(0, 0, 0, "", 1, "offline"))
+        self.runner.tick(1)
+        self.runner.tick(999)
+        self.assertEqual(len(self.worker.jobs), 1)
+        self.runner.tick(1001)
+        self.assertEqual(len(self.worker.jobs), 2)
+        self.worker.results.append(Result(0, 1, 0, "", 1, "offline"))
+        self.runner.tick(1002)
+        self.runner.tick(3001)
+        self.assertEqual(len(self.worker.jobs), 2)
+        self.runner.tick(3002)
+        self.assertEqual(len(self.worker.jobs), 3)
+
+    def test_default_fallback_latency_at_40_keys_per_second(self):
+        runner = AILines(9, self.runner.predictor, self.worker)
+        typed = emitted = 0
+        key_times = []
+        next_key = 0
+        for now in range(0, 2200, 8):
+            if now >= next_key and next_key < 2000:
+                runner.on_user_keyed(next_key)
+                key_times.append(next_key)
+                typed += 1
+                next_key += 25
+            runner.tick(now)
+            count = runner.stats["random_chars"] // 9
+            while emitted < count:
+                self.assertLessEqual(now - key_times[emitted], 100)
+                emitted += 1
+        self.assertEqual(typed, 80)
+        self.assertEqual(emitted, typed)
+        self.assertTrue(all(not line.due for line in runner.lines))
+
+
 class ClientTests(unittest.TestCase):
     def test_rejects_external_endpoints(self):
         with self.assertRaises(ValueError):

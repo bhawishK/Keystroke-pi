@@ -15,10 +15,11 @@ class Line:
     due: deque = field(default_factory=lambda: deque(maxlen=24))
     revision: int = 0
     retry_at: int = 0
+    fallback_active: bool = False
 
 
 class AILines:
-    def __init__(self, count, predictor, worker, fallback_ms=500):
+    def __init__(self, count, predictor, worker, fallback_ms=0):
         self.predictor, self.worker = predictor, worker
         self.fallback_ms = fallback_ms
         self.lines = [Line() for _ in range(count)]
@@ -27,17 +28,25 @@ class AILines:
         self.pending = None
         self.cursor = 0
         self.active = False
+        self.last_key_ms = None
+        self.next_request_at = 0
+        self.failures = 0
         self.stats = {"ai_chars": 0, "random_chars": 0, "stale": 0, "errors": 0,
-                      "requests": 0, "last_latency_ms": 0}
+                      "requests": 0, "last_latency_ms": 0, "fallback_entries": 0}
         self.last_error = ""
 
     def on_user_keyed(self, now_ms):
         self.active = True
-        base = self.predictor.predict_interval_ms()
+        # The learned rhythm can be much slower than the current typing burst.
+        # Schedule from actual arrival time, never accumulate predicted delays.
+        interval = (now_ms - self.last_key_ms if self.last_key_ms is not None
+                    else self.predictor.predict_interval_ms())
+        self.last_key_ms = now_ms
+        base = max(1, min(80, interval * 0.5))
         for line in self.lines:
-            start = max(now_ms, line.due[-1] if line.due else now_ms)
             if len(line.due) < line.due.maxlen:
-                line.due.append(start + int(max(70, min(1400, base * random.uniform(.72, 1.28)))))
+                due = now_ms + int(base * random.uniform(.72, 1.0))
+                line.due.append(max(due, line.due[-1] if line.due else due))
 
     def set_human(self, text, edited=False):
         self.human = text
@@ -54,6 +63,8 @@ class AILines:
             if result.error:
                 self.stats["errors"] += 1
                 self.last_error = result.error
+                self.failures += 1
+                self.next_request_at = now_ms + min(30000, 1000 * 2 ** min(5, self.failures - 1))
                 line.retry_at = now_ms + 3000
             elif result.epoch != self.epoch or result.revision != line.revision:
                 self.stats["stale"] += 1
@@ -63,26 +74,31 @@ class AILines:
                 separator = " " if preceding and not preceding.endswith(" ") else ""
                 line.buffer = (line.buffer + separator + result.text)[:256]
                 self.last_error = ""
+                self.failures = 0
+                self.next_request_at = 0
 
-        for index, line in enumerate(self.lines):
-            if not line.due or line.due[0] > now_ms:
-                continue
-            if line.buffer:
-                char, line.buffer = line.buffer[0], line.buffer[1:]
-                self.stats["ai_chars"] += 1
-            elif now_ms - line.due[0] >= self.fallback_ms:
-                char = self.predictor.sample_char()
-                self.stats["random_chars"] += 1
-            else:
-                continue
-            line.text = trim_line(line.text + char)
-            line.due.popleft()
-            # Space remaining queued characters from now; never dump a backlog.
-            if line.due:
-                shift = max(0, now_ms + 70 - line.due[0])
-                line.due = deque((due + shift for due in line.due), maxlen=24)
+        for line in self.lines:
+            # Drain a bounded number of overdue keys each frame. No extra 70 ms
+            # spacing: that imposed an absolute throughput ceiling on fast typing.
+            emitted = 0
+            while line.due and line.due[0] <= now_ms and emitted < 8:
+                if line.buffer:
+                    char, line.buffer = line.buffer[0], line.buffer[1:]
+                    line.fallback_active = False
+                    self.stats["ai_chars"] += 1
+                elif line.fallback_active or now_ms - line.due[0] >= self.fallback_ms:
+                    if not line.fallback_active:
+                        self.stats["fallback_entries"] += 1
+                    line.fallback_active = True
+                    char = self.predictor.sample_char()
+                    self.stats["random_chars"] += 1
+                else:
+                    break
+                line.text = trim_line(line.text + char)
+                line.due.popleft()
+                emitted += 1
 
-        if self.active and self.pending is None:
+        if self.active and self.pending is None and now_ms >= self.next_request_at:
             for offset in range(len(self.lines)):
                 index = (self.cursor + offset) % len(self.lines)
                 line = self.lines[index]
@@ -104,6 +120,7 @@ class AILines:
         self.lines = [Line() for _ in self.lines]
         self.human = ""
         self.active = False
+        self.last_key_ms = None
 
     def close(self):
         self.worker.close()

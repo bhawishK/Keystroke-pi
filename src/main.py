@@ -66,7 +66,7 @@ def load_font(size: int) -> pygame.font.Font:
 
 
 class KeystrokeApp:
-    def __init__(self, *, fullscreen: bool, engine="random", endpoint="http://127.0.0.1:8080/v1/chat/completions", fallback_ms=500) -> None:
+    def __init__(self, *, fullscreen: bool, engine="random", endpoint="http://127.0.0.1:8080/v1/chat/completions", fallback_ms=0) -> None:
         flags = pygame.SCALED
         if fullscreen:
             flags |= pygame.FULLSCREEN
@@ -216,7 +216,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--engine", choices=("random", "llm"), default="random")
     parser.add_argument("--endpoint", default="http://127.0.0.1:8080/v1/chat/completions")
-    parser.add_argument("--fallback-ms", type=int, default=500)
+    parser.add_argument("--fallback-ms", type=int, default=0)
     args = parser.parse_args()
     if args.fallback_ms < 0:
         parser.error("--fallback-ms must be nonnegative")
