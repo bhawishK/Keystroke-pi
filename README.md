@@ -24,11 +24,24 @@ powershell -ExecutionPolicy Bypass -File scripts/run-local.ps1
 
 To return to the preserved lightweight version, close the application and run `git switch main`. To resume this experiment, run `git switch desktop-llm-testing`. Models and environments are ignored local files shared by these branches, not committed assets.
 
+## Moving lines
+
+The desktop launcher shuffles all ten screen positions every three seconds, starting with the first accepted keystroke. Every line changes position on each shuffle, including the human line. Text, AI buffers, fallback state, and edit ownership stay attached to logical lines. No human-row highlight or movement animation is added. Reset clears the layout and restarts the timer only when typing resumes. Shuffling continues while you pause after starting.
+
+```powershell
+# Faster movement, once per second:
+powershell -ExecutionPolicy Bypass -File scripts/run-desktop.ps1 -ShuffleMs 1000
+# Disable movement for a comparison:
+powershell -ExecutionPolicy Bypass -File scripts/run-desktop.ps1 -ShuffleMs 0
+```
+
+The lightweight launcher defaults to no shuffling. Direct Python launches can opt in with `--shuffle-ms 3000`. Twenty-one regression tests pass, including repeated identity-preserving shuffles, reset, disabled mode, and headless typing/backspace/rendering after movement.
+
 ## What the model is instructed to do
 
 The editable instructions live in `src/writing_prompts.py`. The desktop profile asks it to write a competing anonymous line that the participant might mistake for their own: match topic, vocabulary, perspective, capitalization, short phrasing, informal grammar, and roughness. Nine row-specific strategies vary close paraphrases, small alternative details, neighboring thoughts, emotional tone, and plausible recollections. It must not explain the game, speak as an assistant, label its output, or copy the entire human sample. Each result is a standalone passage so late output can recover after random fallback.
 
-Output is filtered to the same letters/digits/spaces alphabet as human input, preventing punctuation alone from identifying AI rows. Model instructions are best-effort; matching style and confusing a participant require hands-on evaluation. The prompt changes do not hide the immediate key-to-row timing cue, so this is a live-writing test rather than proof that identity cannot be inferred. Shuffled recognition rounds are not implemented here.
+Output is filtered to the same letters/digits/spaces alphabet as human input, preventing punctuation alone from identifying AI rows. Model instructions are best-effort; matching style and confusing a participant require hands-on evaluation. Periodic row shuffling removes the stable row-position cue, but does not eliminate immediate key-to-row timing clues. This is a live-writing experiment rather than proof that identity cannot be inferred. A separate scored recognition round is not implemented here.
 
 Desktop validation on 19 October 2026: the downloaded 1,929,903,264-byte Q4_K_M file passed SHA-256 verification against Hugging Face metadata. Three sequential requests on the inspected desktop took 3,328 ms, 1,141 ms, and 1,265 ms end to end. For the synthetic sample `i walked home after the rain and kept thinking about the conversation we never finished`, one result was `i strolled home after the rain and kept wondering about our unfinished talk`. These are individual short-passage timings, not nine-line throughput or proof of human confusion. The desktop launcher also passed headless app startup and model-server shutdown verification. All 18 regression tests passed.
 
