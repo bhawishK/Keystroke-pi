@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pygame
 
+from ai_lines import AILines
+from local_llm import LocalLLM
 from charset import is_allowed_char
 from ghosts import GhostRunner, trim_line, visible_tail
 from predictor import MODEL_FILENAME, NgramPredictor
@@ -64,7 +66,7 @@ def load_font(size: int) -> pygame.font.Font:
 
 
 class KeystrokeApp:
-    def __init__(self, *, fullscreen: bool) -> None:
+    def __init__(self, *, fullscreen: bool, engine="random", endpoint="http://127.0.0.1:8080/v1/chat/completions", fallback_ms=500) -> None:
         flags = pygame.SCALED
         if fullscreen:
             flags |= pygame.FULLSCREEN
@@ -77,7 +79,8 @@ class KeystrokeApp:
         self.predictor = NgramPredictor(MODEL_PATH)
         self.predictor.load()
         self.live_index = random.randrange(LINE_COUNT)
-        self.ghosts = GhostRunner(LINE_COUNT - 1, self.predictor)
+        self.ghosts = (AILines(LINE_COUNT - 1, self.predictor, LocalLLM(endpoint), fallback_ms)
+                       if engine == "llm" else GhostRunner(LINE_COUNT - 1, self.predictor))
 
         self.live_text = ""
         self.last_key_time: int | None = None
@@ -110,6 +113,11 @@ class KeystrokeApp:
                 self.clock.tick(60)
         finally:
             self.predictor.save()
+            if isinstance(self.ghosts, AILines):
+                self.ghosts.close()
+                print("LLM session:", self.ghosts.stats)
+                if self.ghosts.last_error:
+                    print("Last LLM error:", self.ghosts.last_error, file=sys.stderr)
 
     def _on_key_down(self, event: pygame.event.Event, now: int) -> bool:
         if event.key == pygame.K_ESCAPE:
@@ -138,6 +146,8 @@ class KeystrokeApp:
         self.last_key_time = now
         self.live_text = trim_line(self.live_text + char)
         self.predictor.learn(char, interval)
+        if isinstance(self.ghosts, AILines):
+            self.ghosts.set_human(self.live_text)
         self.ghosts.on_user_keyed(now)
 
     def _on_backspace(self, now: int) -> None:
@@ -145,6 +155,9 @@ class KeystrokeApp:
         if not self.live_text:
             return
         self.live_text = self.live_text[:-1]
+        self.predictor.history = list(self.live_text[-(self.predictor.order + 8):])
+        if isinstance(self.ghosts, AILines):
+            self.ghosts.set_human(self.live_text, edited=True)
         self.last_key_time = now
 
     def _reset(self) -> None:
@@ -201,7 +214,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use a fixed 720 × 720 window (default on Mac).",
     )
-    return parser.parse_args()
+    parser.add_argument("--engine", choices=("random", "llm"), default="random")
+    parser.add_argument("--endpoint", default="http://127.0.0.1:8080/v1/chat/completions")
+    parser.add_argument("--fallback-ms", type=int, default=500)
+    args = parser.parse_args()
+    if args.fallback_ms < 0:
+        parser.error("--fallback-ms must be nonnegative")
+    return args
 
 
 def main() -> None:
@@ -212,7 +231,8 @@ def main() -> None:
     pygame.init()
     pygame.key.set_repeat(0)
     try:
-        KeystrokeApp(fullscreen=fullscreen).run()
+        KeystrokeApp(fullscreen=fullscreen, engine=args.engine, endpoint=args.endpoint,
+                     fallback_ms=args.fallback_ms).run()
     finally:
         pygame.quit()
 
