@@ -62,19 +62,13 @@ class LocalLLM:
             text, error = "", ""
             try:
                 payload = {
-                    "model": self.model, "stream": False, "max_tokens": 48,
+                    "model": self.model, "stream": False, "max_tokens": 40,
                     "temperature": 0.85, "top_p": 0.9,
-                    "messages": [
-                        {"role": "system", "content": (
-                            "Write a short natural passage for an anonymous writing installation. "
-                            "Match the topic and tone of the human excerpt, but use different words. "
-                            "Write a new standalone sentence; prior passage is only a style reference. "
-                            "Return only 10 to 25 words "
-                            "of new prose. No headings, explanations, quotes or speaker labels.")},
-                        {"role": "user", "content": json.dumps({
-                            "human_excerpt": human, "your_passage_so_far": own,
-                            "variation": row + 1})},
-                    ],
+                    "messages": [{"role": "user", "content": (
+                        "Write one short standalone sentence in a similar style to this text, "
+                        "using different words. Do not copy the input. Output only the new sentence: " + human
+                        + ("\nAvoid repeating this previous sentence: " + own if own else "")
+                    )}],
                 }
                 request = Request(self.endpoint, data=json.dumps(payload).encode(),
                                   headers={"Content-Type": "application/json"})
