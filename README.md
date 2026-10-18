@@ -30,6 +30,8 @@ The editable instructions live in `src/writing_prompts.py`. The desktop profile 
 
 Output is filtered to the same letters/digits/spaces alphabet as human input, preventing punctuation alone from identifying AI rows. Model instructions are best-effort; matching style and confusing a participant require hands-on evaluation. The prompt changes do not hide the immediate key-to-row timing cue, so this is a live-writing test rather than proof that identity cannot be inferred. Shuffled recognition rounds are not implemented here.
 
+Desktop validation on 19 October 2026: the downloaded 1,929,903,264-byte Q4_K_M file passed SHA-256 verification against Hugging Face metadata. Three sequential requests on the inspected desktop took 3,328 ms, 1,141 ms, and 1,265 ms end to end. For the synthetic sample `i walked home after the rain and kept thinking about the conversation we never finished`, one result was `i strolled home after the rain and kept wondering about our unfinished talk`. These are individual short-passage timings, not nine-line throughput or proof of human confusion. The desktop launcher also passed headless app startup and model-server shutdown verification. All 18 regression tests passed.
+
 Run all tests with `.venv/Scripts/python.exe -m unittest discover -s tests -v`. The desktop tests cover distinct row strategies, output filtering, basic-profile compatibility, and timeout selection; the original fallback regression tests still apply.
 
 ---
