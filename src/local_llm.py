@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from writing_prompts import build_messages, clean_output
 from urllib.parse import urlparse
 from urllib.request import Request, build_opener, ProxyHandler
 
@@ -22,7 +23,12 @@ class Result:
 
 class LocalLLM:
     def __init__(self, endpoint="http://127.0.0.1:8080/v1/chat/completions",
-                 model="local", timeout=12.0):
+                 model="local", timeout=None, profile="basic"):
+        if profile not in {"basic", "desktop"}:
+            raise ValueError("Unknown writing profile")
+        self.profile = profile
+        if timeout is None:
+            timeout = 45.0 if profile == "desktop" else 12.0
         parsed = urlparse(endpoint)
         if parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost", "::1"}:
             raise ValueError("LLM endpoint must be an HTTP loopback address")
@@ -35,7 +41,7 @@ class LocalLLM:
 
     def submit(self, epoch, row, revision, human, own):
         try:
-            self.requests.put_nowait((epoch, row, revision, human[-320:], own[-160:]))
+            self.requests.put_nowait((epoch, row, revision, human[-640:] if self.profile == "desktop" else human[-320:], own[-160:]))
             return True
         except queue.Full:
             return False
@@ -62,13 +68,9 @@ class LocalLLM:
             text, error = "", ""
             try:
                 payload = {
-                    "model": self.model, "stream": False, "max_tokens": 40,
+                    "model": self.model, "stream": False, "max_tokens": 64 if self.profile == "desktop" else 40,
                     "temperature": 0.85, "top_p": 0.9,
-                    "messages": [{"role": "user", "content": (
-                        "Write one short standalone sentence in a similar style to this text, "
-                        "using different words. Do not copy the input. Output only the new sentence: " + human
-                        + ("\nAvoid repeating this previous sentence: " + own if own else "")
-                    )}],
+                    "messages": build_messages(self.profile, row, human, own),
                 }
                 request = Request(self.endpoint, data=json.dumps(payload).encode(),
                                   headers={"Content-Type": "application/json"})
@@ -77,7 +79,7 @@ class LocalLLM:
                 content = data["choices"][0]["message"]["content"]
                 if not isinstance(content, str):
                     raise ValueError("Missing generated text")
-                text = " ".join(content.split()).strip('"')[:240]
+                text = clean_output(content, self.profile)
                 if not text:
                     raise ValueError("Empty generated text")
             except Exception as exc:

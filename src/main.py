@@ -66,7 +66,7 @@ def load_font(size: int) -> pygame.font.Font:
 
 
 class KeystrokeApp:
-    def __init__(self, *, fullscreen: bool, engine="random", endpoint="http://127.0.0.1:8080/v1/chat/completions", fallback_ms=0) -> None:
+    def __init__(self, *, fullscreen: bool, engine="random", endpoint="http://127.0.0.1:8080/v1/chat/completions", fallback_ms=0, llm_profile="basic") -> None:
         flags = pygame.SCALED
         if fullscreen:
             flags |= pygame.FULLSCREEN
@@ -79,7 +79,7 @@ class KeystrokeApp:
         self.predictor = NgramPredictor(MODEL_PATH)
         self.predictor.load()
         self.live_index = random.randrange(LINE_COUNT)
-        self.ghosts = (AILines(LINE_COUNT - 1, self.predictor, LocalLLM(endpoint), fallback_ms)
+        self.ghosts = (AILines(LINE_COUNT - 1, self.predictor, LocalLLM(endpoint, profile=llm_profile), fallback_ms)
                        if engine == "llm" else GhostRunner(LINE_COUNT - 1, self.predictor))
 
         self.live_text = ""
@@ -217,6 +217,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--engine", choices=("random", "llm"), default="random")
     parser.add_argument("--endpoint", default="http://127.0.0.1:8080/v1/chat/completions")
     parser.add_argument("--fallback-ms", type=int, default=0)
+    parser.add_argument("--llm-profile", choices=("basic", "desktop"), default="basic")
     args = parser.parse_args()
     if args.fallback_ms < 0:
         parser.error("--fallback-ms must be nonnegative")
@@ -232,7 +233,7 @@ def main() -> None:
     pygame.key.set_repeat(0)
     try:
         KeystrokeApp(fullscreen=fullscreen, engine=args.engine, endpoint=args.endpoint,
-                     fallback_ms=args.fallback_ms).run()
+                     fallback_ms=args.fallback_ms, llm_profile=args.llm_profile).run()
     finally:
         pygame.quit()
 
